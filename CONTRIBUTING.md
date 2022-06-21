@@ -28,6 +28,7 @@ yarn example android
 ```
 
 If you got the error: "error: ReferenceError: SHA-1 for file". Simply run:
+
 ```bash
 # https://github.com/facebook/metro/issues/330
 yarn global remove react-native

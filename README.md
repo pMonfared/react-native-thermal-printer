@@ -178,7 +178,7 @@ let defaultConfig: PrintTcpInterface = {
 ### Available config
 
 | Name                        | Type      | Default           | Description                                                                  |
-| --------------------------- | --------- |-------------------| ---------------------------------------------------------------------------- |
+| --------------------------- | --------- | ----------------- | ---------------------------------------------------------------------------- |
 | ip                          | `string`  | `192.168.192.168` | printer ip address                                                           |
 | port                        | `number`  | `9100`            | printer port                                                                 |
 | payload                     | `string`  | ``                | text that you send to the printer                                            |

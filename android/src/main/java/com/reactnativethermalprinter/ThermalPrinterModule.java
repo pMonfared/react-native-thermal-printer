@@ -7,9 +7,13 @@ import android.graphics.Bitmap;
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import android.util.Base64;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 
 import com.bumptech.glide.Glide;
 import com.dantsu.escposprinter.EscPosPrinter;
+import com.dantsu.escposprinter.EscPosPrinterCommands;
 import com.dantsu.escposprinter.connection.DeviceConnection;
 import com.dantsu.escposprinter.connection.bluetooth.BluetoothPrintersConnections;
 import com.dantsu.escposprinter.connection.tcp.TcpConnection;
@@ -45,6 +49,9 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.Set;
 
+import android.util.Log;
+import android.util.DisplayMetrics;
+
 @ReactModule(name = ThermalPrinterModule.NAME)
 public class ThermalPrinterModule extends ReactContextBaseJavaModule {
   private static final String LOG_TAG = "RN_Thermal_Printer";
@@ -76,6 +83,13 @@ public class ThermalPrinterModule extends ReactContextBaseJavaModule {
 //
     this.jsPromise = promise;
     try {
+        TcpConnection connection = new TcpConnection(ipAddress, (int) port, (int) timeout);
+        this.printImgs(connection, payload, autoCut, openCashbox, mmFeedPaper, printerDpi, printerWidthMM, printerNbrCharactersPerLine);
+      } catch (Exception e) {
+        this.jsPromise.reject("Connection Error", e.getMessage());
+      }
+
+    try {
       TcpConnection connection = new TcpConnection(ipAddress, (int) port, (int) timeout);
       this.printIt(connection, payload, autoCut, openCashbox, mmFeedPaper, printerDpi, printerWidthMM, printerNbrCharactersPerLine);
     } catch (Exception e) {
@@ -101,6 +115,11 @@ public class ThermalPrinterModule extends ReactContextBaseJavaModule {
     if (ContextCompat.checkSelfPermission(getCurrentActivity(), Manifest.permission.BLUETOOTH) != PackageManager.PERMISSION_GRANTED) {
       ActivityCompat.requestPermissions(getCurrentActivity(), new String[]{Manifest.permission.BLUETOOTH}, 1);
     } else {
+      try {
+        this.printImgs(btPrinter.connect(), payload, autoCut, openCashbox, mmFeedPaper, printerDpi, printerWidthMM, printerNbrCharactersPerLine);
+      } catch (Exception e) {
+        this.jsPromise.reject("Connection Error", e.getMessage());
+      }
       try {
         this.printIt(btPrinter.connect(), payload, autoCut, openCashbox, mmFeedPaper, printerDpi, printerWidthMM, printerNbrCharactersPerLine);
       } catch (Exception e) {
@@ -161,24 +180,71 @@ public class ThermalPrinterModule extends ReactContextBaseJavaModule {
    * Synchronous printing
    */
 
-  private String preprocessImgTag(EscPosPrinter printer, String text) {
+   public Bitmap printBitmap(String encodedString, int pixelWidth) {
+    final String pureBase64Encoded = encodedString.substring(encodedString.indexOf(",")  + 1);
+    final byte[] decodedBytes = Base64.decode(pureBase64Encoded, Base64.DEFAULT);
+    Bitmap decodedBitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.length);
+    int w = decodedBitmap.getWidth();
+    Integer h = decodedBitmap.getHeight();
+    return Bitmap.createScaledBitmap(decodedBitmap, pixelWidth, (pixelWidth / w) * h, false);
+  }
+
+  private String preprocessTags(EscPosPrinter printer, String text) {
 
     Pattern p = Pattern.compile("(?<=\\<img\\>)(.*)(?=\\<\\/img\\>)");
     Matcher m = p.matcher(text);
     StringBuffer sb = new StringBuffer();
     while (m.find()) {
       String firstGroup = m.group(1);
-      m.appendReplacement(sb, PrinterTextParserImg.bitmapToHexadecimalString(printer, getBitmapFromUrl(firstGroup)));
+      m.appendReplacement(sb, "");
     }
     m.appendTail(sb);
-
     return sb.toString();
+  }
+
+  private void printImgs(DeviceConnection printerConnection, String payload, boolean autoCut, boolean openCashbox, double mmFeedPaper, double printerDpi, double printerWidthMM, double printerNbrCharactersPerLine) {
+    try {
+      EscPosPrinterCommands printerCommands = new EscPosPrinterCommands(printerConnection);
+
+      Pattern p = Pattern.compile("(?<=\\<img\\>)(.*)(?=\\<\\/img\\>)");
+      Matcher m = p.matcher(payload);
+
+      while (m.find()) {
+        String firstGroup = m.group(1);
+
+        final String pureBase64Encoded = firstGroup.substring(firstGroup.indexOf(",")  + 1);
+        final byte[] decodedString = Base64.decode(pureBase64Encoded, Base64.DEFAULT);
+        Bitmap originalBitmap = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.length);
+
+        int targetWidth = 383; // 48mm printing zone with 203dpi => 383px
+        Bitmap rescaledBitmap = Bitmap.createScaledBitmap(
+           originalBitmap, 
+           targetWidth, 
+           Math.round(((float) originalBitmap.getHeight()) * ((float) targetWidth) / ((float) originalBitmap.getWidth())), 
+           true
+        );
+
+        printerCommands.connect();
+        printerCommands.reset();
+        printerCommands.printImage(EscPosPrinterCommands.bitmapToBytes(rescaledBitmap));
+        printerCommands.feedPaper(50);
+        printerCommands.cutPaper();
+      }
+      printerCommands.disconnect();
+      this.jsPromise.resolve(true);
+    } catch (EscPosConnectionException e) {
+      this.jsPromise.reject("Broken connection", e.getMessage());
+    } catch (Exception e) {
+      this.jsPromise.reject("ERROR", e.getMessage());
+    }
   }
 
   private void printIt(DeviceConnection printerConnection, String payload, boolean autoCut, boolean openCashbox, double mmFeedPaper, double printerDpi, double printerWidthMM, double printerNbrCharactersPerLine) {
     try {
-      EscPosPrinter printer = new EscPosPrinter(printerConnection, (int) printerDpi, (float) printerWidthMM, (int) printerNbrCharactersPerLine);
-      String processedPayload = preprocessImgTag(printer, payload);
+      EscPosPrinter printer = new EscPosPrinter(printerConnection,(int) printerDpi, (float) printerWidthMM, (int) printerNbrCharactersPerLine );
+      String processedPayload = preprocessTags(printer, payload);
+      
+    
 
       if (openCashbox) {
         printer.printFormattedTextAndOpenCashBox(processedPayload, (float) mmFeedPaper);
